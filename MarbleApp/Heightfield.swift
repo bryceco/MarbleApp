@@ -12,8 +12,8 @@ struct HeightSample {
 }
 
 /// A smooth (C∞) surface over a rectangular playfield in the x/z plane:
-/// a quartic bowl that rises toward the edges, plus a sum of Gaussian bumps
-/// (positive = hill, negative = valley) in the interior.
+/// a rim of constant height along all four edges that is flat in the interior,
+/// plus a sum of Gaussian bumps (positive = hill, negative = valley).
 struct Heightfield {
 	struct Bump {
 		var center: SIMD2<Float>
@@ -23,20 +23,20 @@ struct Heightfield {
 
 	/// The playfield spans [-halfExtent, +halfExtent] in x and z.
 	let halfExtent: SIMD2<Float>
-	/// Height of the bowl term at the edge midpoints (corners are 2x this).
+	/// Height of the rim along the edges, a little above the tallest hill.
 	let rimHeight: Float
 	let bumps: [Bump]
 
-	init(halfExtent: SIMD2<Float>, rimHeight: Float, bumpCount: Int, seed: UInt64) {
+	init(halfExtent: SIMD2<Float>, hillCount: Int, hillHeight: Float, seed: UInt64) {
 		self.halfExtent = halfExtent
-		self.rimHeight = rimHeight
+		rimHeight = hillHeight * 1.25
 		var rng = SplitMix64(seed: seed)
 		let minExtent = min(halfExtent.x, halfExtent.y)
-		bumps = (0 ..< bumpCount).map { _ in
+		bumps = (0 ..< hillCount).map { _ in
 			let cx = Float.random(in: -0.75 ... 0.75, using: &rng) * halfExtent.x
 			let cz = Float.random(in: -0.75 ... 0.75, using: &rng) * halfExtent.y
 			let sign: Float = Bool.random(using: &rng) ? 1 : -1
-			let amplitude = sign * Float.random(in: 0.4 ... 1.2, using: &rng)
+			let amplitude = sign * hillHeight * Float.random(in: 0.5 ... 1.0, using: &rng)
 			let sigma = Float.random(in: 0.12 ... 0.25, using: &rng) * minExtent
 			return Bump(center: SIMD2(cx, cz), amplitude: amplitude, sigma: sigma)
 		}
@@ -45,8 +45,8 @@ struct Heightfield {
 	/// Height only; cheaper than `sample` when derivatives aren't needed.
 	func height(at p: SIMD2<Float>) -> Float {
 		let u = p / halfExtent
-		let u2 = u * u
-		var h = rimHeight * (u2.x * u2.x + u2.y * u2.y)
+		let u8 = Self.pow8(u)
+		var h = rimHeight * (1 - (1 - u8.x) * (1 - u8.y))
 		for b in bumps {
 			let d = p - b.center
 			h += b.amplitude * exp(-dot(d, d) / (2 * b.sigma * b.sigma))
@@ -56,15 +56,22 @@ struct Heightfield {
 
 	/// Height, gradient and Hessian at a point.
 	func sample(at p: SIMD2<Float>) -> HeightSample {
-		// Bowl: rimHeight * (u⁴ + v⁴), u = x/hx, v = z/hz
+		// Rim: R·(1 − A·B) with A = 1 − u⁸, B = 1 − v⁸, u = x/hx, v = z/hz.
+		// Equals R along every edge, ≈0 in the interior.
 		let u = p / halfExtent
 		let u2 = u * u
-		let u3 = u2 * u
-		var h = rimHeight * (u2.x * u2.x + u2.y * u2.y)
-		var g = 4 * rimHeight * u3 / halfExtent
-		var hxx = 12 * rimHeight * u2.x / (halfExtent.x * halfExtent.x)
-		var hzz = 12 * rimHeight * u2.y / (halfExtent.y * halfExtent.y)
-		var hxz: Float = 0
+		let u6 = u2 * u2 * u2
+		let u7 = u6 * u
+		let u8 = u6 * u2
+		let a = 1 - u8.x
+		let b = 1 - u8.y
+		let du = 8 * u7 / halfExtent // d(u⁸)/dx, d(v⁸)/dz
+		let ddu = 56 * u6 / (halfExtent * halfExtent) // second derivatives
+		var h = rimHeight * (1 - a * b)
+		var g = rimHeight * SIMD2(du.x * b, a * du.y)
+		var hxx = rimHeight * ddu.x * b
+		var hzz = rimHeight * a * ddu.y
+		var hxz = -rimHeight * du.x * du.y
 
 		// Gaussian bumps: e = a·exp(-|d|²/2σ²)
 		//   ∇e = -e·d/σ²,  H(e) = e·(d dᵀ/σ⁴ − I/σ²)
@@ -82,6 +89,12 @@ struct Heightfield {
 		return HeightSample(h: h,
 		                    grad: g,
 		                    hess: simd_float2x2(rows: [SIMD2(hxx, hxz), SIMD2(hxz, hzz)]))
+	}
+
+	private static func pow8(_ u: SIMD2<Float>) -> SIMD2<Float> {
+		let u2 = u * u
+		let u4 = u2 * u2
+		return u4 * u4
 	}
 
 	/// Unit surface normal for a gradient.

@@ -6,16 +6,42 @@ import SwiftUI
 @MainActor
 @Observable
 final class GameModel {
-	let field = Heightfield(halfExtent: SIMD2(8, 6), rimHeight: 4, bumpCount: 10, seed: 2)
+	let halfExtent = SIMD2<Float>(8, 6)
 	let marbleRadius: Float = 0.3
+
+	// Surface parameters; changing any of them regenerates the terrain.
+	var hillCount = 10 { didSet { regenerate() } }
+	var hillHeight: Float = 1.0 { didSet { regenerate() } }
+	var seed: UInt64 = 2 { didSet { regenerate() } }
+
+	@ObservationIgnored private(set) var field: Heightfield
 
 	/// Bumped by the view on each tap so the RealityView update closure re-runs.
 	private(set) var tapCount = 0
 	@ObservationIgnored private var pendingTap: CGPoint?
 
 	@ObservationIgnored private var marble: MarbleState?
+	@ObservationIgnored private let terrainEntity = ModelEntity()
 	@ObservationIgnored private let marbleEntity = ModelEntity()
 	@ObservationIgnored private var updateSubscription: EventSubscription?
+
+	init() {
+		// @Observable properties can't be read until every stored property is set,
+		// so start with an empty field, then build the real one from the parameters.
+		field = Heightfield(halfExtent: halfExtent, hillCount: 0, hillHeight: 0, seed: 0)
+		field = Heightfield(halfExtent: halfExtent, hillCount: hillCount, hillHeight: hillHeight, seed: seed)
+	}
+
+	func newSeed() {
+		seed = UInt64.random(in: 0 ... .max)
+	}
+
+	private func regenerate() {
+		field = Heightfield(halfExtent: halfExtent, hillCount: hillCount, hillHeight: hillHeight, seed: seed)
+		terrainEntity.model?.mesh = field.makeMesh(resolution: 160)
+		marble = nil
+		marbleEntity.isEnabled = false
+	}
 
 	// MARK: Scene setup
 
@@ -27,8 +53,8 @@ final class GameModel {
 			colorA: CGColor(red: 0.55, green: 0.70, blue: 0.45, alpha: 1),
 			colorB: CGColor(red: 0.48, green: 0.63, blue: 0.40, alpha: 1))))
 		ground.roughness = 0.9
-		let terrain = ModelEntity(mesh: field.makeMesh(resolution: 160), materials: [ground])
-		content.add(terrain)
+		terrainEntity.model = ModelComponent(mesh: field.makeMesh(resolution: 160), materials: [ground])
+		content.add(terrainEntity)
 
 		// Marble (hidden until the first tap)
 		var shiny = PhysicallyBasedMaterial()
