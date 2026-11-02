@@ -1,17 +1,24 @@
+import RealityKit
 import SwiftUI
-import Playgrounds
 
 struct ContentView: View {
-    var body: some View {
-        Text("Hello, world!")
-            .padding()
-    }
+	@State private var model = GameModel()
+
+	var body: some View {
+		RealityView { content in
+			model.makeScene(content)
+		} update: { content in
+			// Reading tapCount is what makes this closure re-run on each tap.
+			_ = model.tapCount
+			model.consumePendingTap(content)
+		}
+		.onTapGesture { location in
+			model.tap(at: location)
+		}
+		.ignoresSafeArea()
+	}
 }
 
 #Preview {
-    ContentView()
-}
-
-#Playground {
-    _ = 1 + 2
+	ContentView()
 }
