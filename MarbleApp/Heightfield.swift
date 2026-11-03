@@ -44,9 +44,7 @@ struct Heightfield {
 
 	/// Height only; cheaper than `sample` when derivatives aren't needed.
 	func height(at p: SIMD2<Float>) -> Float {
-		let u = p / halfExtent
-		let u8 = Self.pow8(u)
-		var h = rimHeight * (1 - (1 - u8.x) * (1 - u8.y))
+		var h = rim(p / halfExtent).h
 		for b in bumps {
 			let d = p - b.center
 			h += b.amplitude * exp(-dot(d, d) / (2 * b.sigma * b.sigma))
@@ -56,22 +54,12 @@ struct Heightfield {
 
 	/// Height, gradient and Hessian at a point.
 	func sample(at p: SIMD2<Float>) -> HeightSample {
-		// Rim: R·(1 − A·B) with A = 1 − u⁸, B = 1 − v⁸, u = x/hx, v = z/hz.
-		// Equals R along every edge, ≈0 in the interior.
-		let u = p / halfExtent
-		let u2 = u * u
-		let u6 = u2 * u2 * u2
-		let u7 = u6 * u
-		let u8 = u6 * u2
-		let a = 1 - u8.x
-		let b = 1 - u8.y
-		let du = 8 * u7 / halfExtent // d(u⁸)/dx, d(v⁸)/dz
-		let ddu = 56 * u6 / (halfExtent * halfExtent) // second derivatives
-		var h = rimHeight * (1 - a * b)
-		var g = rimHeight * SIMD2(du.x * b, a * du.y)
-		var hxx = rimHeight * ddu.x * b
-		var hzz = rimHeight * a * ddu.y
-		var hxz = -rimHeight * du.x * du.y
+		let r = rim(p / halfExtent)
+		var h = r.h
+		var g = r.grad
+		var hxx = r.hess[0, 0]
+		var hzz = r.hess[1, 1]
+		var hxz = r.hess[0, 1]
 
 		// Gaussian bumps: e = a·exp(-|d|²/2σ²)
 		//   ∇e = -e·d/σ²,  H(e) = e·(d dᵀ/σ⁴ − I/σ²)
@@ -91,10 +79,36 @@ struct Heightfield {
 		                    hess: simd_float2x2(rows: [SIMD2(hxx, hxz), SIMD2(hxz, hzz)]))
 	}
 
-	private static func pow8(_ u: SIMD2<Float>) -> SIMD2<Float> {
+	/// Rim term in normalized coordinates u = x/hx, v = z/hz:
+	///   h = R · s^(1/8),  s = u³² + v³²
+	/// i.e. R times a smooth approximation of max(|u|, |v|)⁴. It is ≈0 in the
+	/// interior, R along the edges, 2^(1/8) ≈ 1.09·R at the corners, and keeps
+	/// rising past the edge everywhere, so there is always an inward force.
+	private func rim(_ u: SIMD2<Float>) -> HeightSample {
 		let u2 = u * u
 		let u4 = u2 * u2
-		return u4 * u4
+		let u8 = u4 * u4
+		let u16 = u8 * u8
+		let u30 = u16 * u8 * u4 * u2
+		let u31 = u30 * u
+		let u32 = u30 * u2
+		let s = u32.x + u32.y
+		// Below this the rim is < 1e-3·R; skip to avoid 0·inf in the derivatives.
+		guard s > 1e-24 else { return HeightSample(h: 0, grad: .zero, hess: .init()) }
+
+		// With h = R·s^q: ∇h = h·q·(∇s/s), and the Hessian follows by the
+		// product rule. Working with ∇s/s keeps everything bounded near s → 0.
+		let q: Float = 1.0 / 8
+		let h = rimHeight * s.squareRoot().squareRoot().squareRoot()
+		let a = 32 * u31 / (s * halfExtent) // (∂s/∂x)/s, (∂s/∂z)/s
+		let b = 32 * 31 * u30 / (s * halfExtent * halfExtent) // (∂²s/∂x²)/s, (∂²s/∂z²)/s
+		let hq = h * q
+		let grad = hq * a
+		let hxx = hq * ((q - 1) * a.x * a.x + b.x)
+		let hzz = hq * ((q - 1) * a.y * a.y + b.y)
+		let hxz = hq * (q - 1) * a.x * a.y
+		return HeightSample(h: h, grad: grad,
+		                    hess: simd_float2x2(rows: [SIMD2(hxx, hxz), SIMD2(hxz, hzz)]))
 	}
 
 	/// Unit surface normal for a gradient.

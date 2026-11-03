@@ -46,8 +46,12 @@ enum MarblePhysics {
 		m.p += dt / 6 * (k1p + 2 * k2p + 2 * k3p + k4p)
 		m.v += dt / 6 * (k1v + 2 * k2v + 2 * k3v + k4v)
 
-		// Safety net; the rim should keep the marble inside on its own.
-		m.p = clamp(m.p, min: -field.halfExtent, max: field.halfExtent)
+		// Safety net: the rim should keep the marble inside on its own, but if
+		// it does reach the mesh edge, reflect rather than pin it there.
+		let clamped = clamp(m.p, min: -field.halfExtent, max: field.halfExtent)
+		if clamped.x != m.p.x { m.v.x = -m.v.x }
+		if clamped.y != m.p.y { m.v.y = -m.v.y }
+		m.p = clamped
 
 		// Project back onto the energy shell.
 		let s = field.sample(at: m.p)
