@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
 	@State private var model = GameModel()
+	@State private var lastDrag: CGSize = .zero
 
 	var body: some View {
 		RealityView { content in
@@ -15,6 +16,15 @@ struct ContentView: View {
 		.onTapGesture { location in
 			model.tap(at: location)
 		}
+		.gesture(
+			DragGesture(minimumDistance: 8)
+				.onChanged { value in
+					let t = value.translation
+					model.tilt(by: CGSize(width: t.width - lastDrag.width, height: t.height - lastDrag.height))
+					lastDrag = t
+				}
+				.onEnded { _ in lastDrag = .zero }
+		)
 		.ignoresSafeArea()
 		.overlay(alignment: .bottom) {
 			controls

@@ -25,6 +25,12 @@ final class GameModel {
 	@ObservationIgnored private let marbleEntity = ModelEntity()
 	@ObservationIgnored private var updateSubscription: EventSubscription?
 
+	// Viewing only: the camera orbits the origin; gravity is unaffected.
+	@ObservationIgnored private let camera = PerspectiveCamera()
+	@ObservationIgnored private let cameraDistance: Float = 21
+	@ObservationIgnored private var cameraAzimuth: Float = 0
+	@ObservationIgnored private var cameraElevation: Float = .pi / 4
+
 	init() {
 		// @Observable properties can't be read until every stored property is set,
 		// so start with an empty field, then build the real one from the parameters.
@@ -69,9 +75,8 @@ final class GameModel {
 		content.add(marbleEntity)
 
 		// Camera
-		let camera = PerspectiveCamera()
-		camera.look(at: .zero, from: SIMD3(0, 16, 14), relativeTo: nil)
 		content.add(camera)
+		updateCamera()
 
 		// Key light with shadows, plus a dim fill from the other side.
 		let key = DirectionalLight()
@@ -92,6 +97,20 @@ final class GameModel {
 
 	// MARK: Input
 
+	/// Orbit the camera by a drag delta in points.
+	func tilt(by delta: CGSize) {
+		cameraAzimuth -= Float(delta.width) * 0.005
+		cameraElevation = min(max(cameraElevation + Float(delta.height) * 0.005, 0.1), .pi / 2 - 0.05)
+		updateCamera()
+	}
+
+	private func updateCamera() {
+		let from = cameraDistance * SIMD3(cos(cameraElevation) * sin(cameraAzimuth),
+		                                  sin(cameraElevation),
+		                                  cos(cameraElevation) * cos(cameraAzimuth))
+		camera.look(at: .zero, from: from, relativeTo: nil)
+	}
+
 	func tap(at point: CGPoint) {
 		pendingTap = point
 		tapCount += 1
@@ -110,6 +129,8 @@ final class GameModel {
 
 	private func drop(at p: SIMD2<Float>) {
 		let h = field.height(at: p)
+		// A drop at or above rim height would have enough energy to leave the field.
+		guard h < field.rimHeight else { return }
 		marble = MarbleState(p: p, v: .zero, energy: MarblePhysics.gravity * h)
 		marbleEntity.isEnabled = true
 		place(MarbleState(p: p, v: .zero, energy: 0), deltaTime: 0)
